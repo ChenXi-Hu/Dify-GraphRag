@@ -10,7 +10,7 @@ from pathlib import Path
 import graphrag.api as api
 from graphrag.config.load_config import load_config
 import pandas as pd
-from config import PROJECT_DIRECTORY, DESTINATION_DIRECTORY, COMMUNITY_LEVEL, CLAIM_EXTRACTION_ENABLED, RESPONSE_TYPE
+from config import PROJECT_DIRECTORY_1, DESTINATION_DIRECTORY_1, PROJECT_DIRECTORY_2, DESTINATION_DIRECTORY_2, COMMUNITY_LEVEL, CLAIM_EXTRACTION_ENABLED, RESPONSE_TYPE
 
 import os
 import shutil
@@ -126,32 +126,11 @@ async def basic_search(query: str = Query(..., description="Basic Search")):
 async def status():
     return JSONResponse(content={"status": "Server is up and running"})
 
-
-class FileChangeHandler(FileSystemEventHandler):
-    def on_modified(self, event):
-        if not event.is_directory:  # 仅处理文件，忽略文件夹
-            source_file = event.src_path
-            target_file = source_file.replace(SOURCE_PATH, TARGET_PATH)
-            # 复制更新的文件（覆盖目标文件）
-            shutil.copy2(source_file, target_file)
-            print(f"更新文件：{source_file} → {target_file}")
-    
-    def on_created(self, event):
-        if not event.is_directory:
-            self.on_modified(event)  # 新增文件时视为需要复制
-    
-    # 如需处理删除操作：
-    def on_deleted(self, event):
-        if not event.is_directory:
-            target_file = event.src_path.replace(SOURCE_PATH, TARGET_PATH)
-            if os.path.exists(target_file):
-                os.remove(target_file)
-                print(f"删除文件：{target_file}")
-
 class SyncHandler(FileSystemEventHandler):
     def __init__(self, source_dir, dest_dir):
         self.source_dir = source_dir
         self.dest_dir = dest_dir
+        super().__init__()
 
     def on_created(self, event):
         """处理创建事件"""
@@ -174,7 +153,7 @@ class SyncHandler(FileSystemEventHandler):
                 shutil.rmtree(dest_path)
             else:
                 os.remove(dest_path)
-        print(f"Deleted {dest_path}")
+        print(f"[删除] {dest_path}")
 
     def on_moved(self, event):
         """处理移动/重命名事件"""
@@ -186,7 +165,7 @@ class SyncHandler(FileSystemEventHandler):
         
         if os.path.exists(dest_src_path):
             os.renames(dest_src_path, dest_new_path)
-        print(f"Moved {dest_src_path} to {dest_new_path}")
+        print(f"[移动] {dest_src_path} → {dest_new_path}")
 
     def _copy_file(self, src_path):
         """复制文件到目标目录"""
@@ -194,21 +173,42 @@ class SyncHandler(FileSystemEventHandler):
         dest_path = os.path.join(self.dest_dir, rel_path)
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         shutil.copy2(src_path, dest_path)
-        print(f"Copied {src_path} to {dest_path}")
+        print(f"[复制] {src_path} → {dest_path}")
 
     def _copy_dir(self, src_path):
         """创建对应目录"""
         rel_path = os.path.relpath(src_path, self.source_dir)
         dest_path = os.path.join(self.dest_dir, rel_path)
         os.makedirs(dest_path, exist_ok=True)
-        print(f"Created directory {dest_path}")
+        print(f"[创建目录] {dest_path}")
 
 def initial_sync(source, dest):
     """初始完全同步"""
     if os.path.exists(dest):
         shutil.rmtree(dest)
-    shutil.copytree(source, dest)
-    print("Initial synchronization completed.")
+    if os.path.exists(source):
+        shutil.copytree(source, dest)
+        print(f"[初始化] 已完成 {source} → {dest}")
+    else:
+        os.makedirs(dest, exist_ok=True)
+        print(f"[警告] 源目录不存在，已创建空目录 {dest}")
+
+def start_observer(source, dest):
+    """启动目录监控服务"""
+    initial_sync(source, dest)
+    
+    event_handler = SyncHandler(source, dest)
+    observer = Observer()
+    observer.schedule(event_handler, source, recursive=True)
+    observer.start()
+    
+    print(f"[监控启动] {source} → {dest}")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
 
 
 if __name__ == "__main__":
